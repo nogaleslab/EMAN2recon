@@ -1,0 +1,16 @@
+3D reconstruction script that uses libraries from SPARX and EMAN
+To use the --CTF option, particles must contain CTF info in the stack header
+
+example job file for an asymmetric reconstruction:
+-------------------
+#!/bin/csh -f
+
+mpirun -np 8 /path/to/refine.py start.hdf init.mrc refine --ou=56 --rs=1 --xr='10 6 5 4 3 2 2 2' --ts='2 1 1 1 1 1 1 1' --delta='20 15 10 8 5 4 3 2' --an='-1 -1 90 80 70 60 40 20' --snr=0.07 --maxit=5 --ref_a=S --sym=c1 --cutoff=1 --MPI --full_output
+
+
+example job file for a microtubule reconstruction (13 & 14 protofilament):
+-------------------
+#!/bin/csh -f
+
+mpirun -np 8 /path/to/refine.py start.hdf init.hdf refine --ou=56 --rs=1 --xr='10 6 5 4 3 2 1' --ts='2 1 1 1 1 1 1' --delta='5 4 3 2 1 0.8 0.5' --an='-1 90 40 20 10 5 2' --snr=0.08 --maxit=3 --ref_a=S --cutoff=1 --MPI --proto='13 14' --oplane=5 --sort --findseam --recon_pad=2 --full_output --hpars='-27.6 9.2 -25.7 9.0'
+
