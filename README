@@ -1,4 +1,4 @@
-3D reconstruction script that uses libraries from SPARX and EMAN
+3D reconstruction script that uses libraries from SPARX and EMAN2
 To use the --CTF option, particles must contain CTF info in the stack header
 
 example job file for an asymmetric reconstruction:
