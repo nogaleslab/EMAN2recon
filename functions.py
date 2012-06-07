@@ -247,11 +247,9 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 		mask3D = createCylMask(data,ou,lmask,ilmask,cmaskf)
 		# if finding seam of helix, create wedge masks
 		if findseam is True:
-			wedgemask_big=[]
-			wedgemask_small=[]
+			wedgemask=[]
 			for pf in xrange(nrefs):
-				wedgemask_big.append(EMData())
-				wedgemask_small.append(EMData())
+				wedgemask.append(EMData())
 
 	for im in xrange(nima):
 		data[im].set_attr('ID', list_of_particles[im])
@@ -534,12 +532,11 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 							vol[iref].write_image(os.path.join(outdir, "volOverSym_%s.hdf"%(itout)),-1)
 							# mask out tubulin & apply sym again for seam
 							# have to make a new wedgemask for each iteration
-							wedgemask_big[iref]=createWedgeMask(nx,proto[iref],dp[iref],dphi[iref],apix,hpar,5)
-							wedgemask_small[iref]=createWedgeMask(nx,proto[iref],dp[iref],dphi[iref],apix,hpar,3)
-							vol[iref] = regenerateFromPF(vol[iref],wedgemask_big[iref],wedgemask_small[iref],dp[iref],dphi[iref],apix)
-							## too many artifacts for fsc using regenerated MT, use oversym for fsc
-							#voleve[iref] = regenerateFromPF(voleve[iref],wedgemask_big[iref],wedgemask_small[iref],dp[iref],dphi[iref],apix)
-							#volodd[iref] = regenerateFromPF(volodd[iref],wedgemask_big[iref],wedgemask_small[iref],dp[iref],dphi[iref],apix)
+							wedgemask[iref]=createWedgeMask(nx,proto[iref],dp[iref],dphi[iref],apix,hpar,3)
+							# recreate the microtubule from seam
+							vol[iref] = regenerateFromPF(vol[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
+							voleve[iref] = regenerateFromPF(voleve[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
+							volodd[iref] = regenerateFromPF(volodd[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
 						else:
 							vol[iref] = vol[iref].helicise(apix, dp[iref], dphi[iref])
 							voleve[iref] = voleve[iref].helicise(apix, dp[iref], dphi[iref])
@@ -1014,15 +1011,21 @@ def createWedgeMask(nx,csym,rise,twist,apix,hfile,ovlp):
 	import math
 	img = EMData(nx,nx)
 	img.to_zero()
-	#add 3 degrees to overlap with the neighboring density!
+	#add ovlp degrees to overlap with the neighboring density
 	overlap=ovlp*math.pi/180.0
-	alpha = math.pi/2 - math.pi/csym - overlap
+	alpha = math.pi/2 - math.pi/csym
 	for x,y in ((x,y) for x in range(0,nx) for y in range(nx/2,nx)):
 		dx = abs(x-nx/2)
 		dy = abs(y-nx/2)
 		# if above the line y = tan(alpha)*x
-		if dy >= dx*math.tan(alpha):
+		inner = dx*math.tan(alpha)
+		outer = dx*math.tan(alpha-overlap)
+		if dy >= inner:
 			img.set(x,y,1)
+		elif dy >= outer:
+			pos = (inner-dy)/(inner-outer)
+			img.set(x,y,1-pos)
+
 	img.process_inplace("mask.sharp",{"outer_radius":nx/2})
 
 	wedge = EMData(nx,nx,nx)
@@ -1035,8 +1038,8 @@ def createWedgeMask(nx,csym,rise,twist,apix,hfile,ovlp):
 		t.set_rotation({"type":"2d","alpha":-finalrot})
 		newslice=img.process("xform",{"transform":t})
 		wedge.insert_clip(newslice,(0,0,z))
-	wedge *= kinesinMask(nx,int(32/apix),54/apix,143/apix,rot)
-	wedge += kinesinMask(nx,int(30/apix),24/apix,164/apix,rot,pos=True)
+	#wedge *= kinesinMask(nx,int(32/apix),54/apix,143/apix,rot)
+	#wedge += kinesinMask(nx,int(30/apix),24/apix,164/apix,rot,pos=True)
 
 	# odd-numbered protofilaments are off by 1/2 twist
 	if csym%2==1:
@@ -1274,7 +1277,7 @@ def applySeamSym(vol,rise,rot,apix):
 	return sumvol
 
 #===========================
-def regenerateFromPF(vol,wedgemaskBig,wedgemaskSm,rise,rot,apix):
+def regenerateFromPF(vol,wedgemask,rise,rot,apix):
 	"""
 	mask out one protofilament and regenerate the full microtubule
 	"""
@@ -1286,8 +1289,8 @@ def regenerateFromPF(vol,wedgemaskBig,wedgemaskSm,rise,rot,apix):
 	sym=int(round(360.0/abs(rot)))
 
 	# apply protofilament symmetry
-	vol *= wedgemaskBig
-	sumvol = vol.copy()
+	sumvol = vol*wedgemask
+
 	pfoffset=int(sym/2)
 	for pnum in range(-pfoffset,sym-pfoffset):
 		if pnum==0:
@@ -1298,13 +1301,8 @@ def regenerateFromPF(vol,wedgemaskBig,wedgemaskSm,rise,rot,apix):
 		t = Transform({"type":"spider","psi":ang})	
 		t.set_trans(0,0,trans)
 		volcopy = vol.process("xform",{"transform":t})
-		seammaskcopy = wedgemaskSm.process("xform",{"transform":t})
-		seammaskcopy.process_inplace("threshold.binary",{"value":0.00001})
-		volcopy *= seammaskcopy
-		try:
-			sumvol.addsmart(volcopy)
-		except:
-			sumvol = smart_add(sumvol,volcopy)
+		seammaskcopy = wedgemask.process("xform",{"transform":t})
+		sumvol = sumvol*(1-seammaskcopy)+volcopy*seammaskcopy
 		
 	sumvol.process_inplace("normalize")
 	return sumvol
