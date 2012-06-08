@@ -12,13 +12,15 @@ def ali3d(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 	    center = 0, maxit = 5, term = 95, CTF = False, fourvar = False, snr = 1.0,  ref_a = "S", sym = "c1", 
 	    sort=True, cutoff=999.99, pix_cutoff="0", two_tail=False, model_jump = "1 1 1 1 1", restart=False, save_half=False,
 	    protos=None, oplane=None, lmask=-1, ilmask=-1, findseam=False, vertstep=None, hpars="-1", hsearch="73.0 170.0",
-	    full_output = False, compare_repro = False, compare_ref_free = "-1" ,ref_free_cutoff = "-1 -1 -1 -1", debug = False, recon_pad = 4, MPI = False):
+	    full_output = False, compare_repro = False, compare_ref_free = "-1" ,ref_free_cutoff = "-1 -1 -1 -1",
+	    wcmask = None, debug = False, recon_pad = 4, MPI = False):
 	if MPI:
 		ali3d_MPI(stack, ref_vol, outdir, maskfile, ir, ou, rs, xr, yr, ts,
 	       		delta, an, center, maxit,term, CTF, fourvar, snr, ref_a, sym, 
 			sort, cutoff, pix_cutoff, two_tail, model_jump,restart, save_half,
 			protos, oplane, lmask, ilmask, findseam, vertstep, hpars, hsearch, 
-			full_output, compare_repro, compare_ref_free, ref_free_cutoff, debug, recon_pad)
+			full_output, compare_repro, compare_ref_free, ref_free_cutoff,
+			wcmask, debug, recon_pad)
 		return
 		print_end_msg("ali3d")
 
@@ -27,7 +29,8 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 	    center = 0, maxit = 5, term = 95, CTF = False, fourvar = False, snr = 1.0,  ref_a = "S", sym = "c1", 
 	    sort=True, cutoff=999.99, pix_cutoff="0", two_tail=False, model_jump="1 1 1 1 1", restart=False, save_half=False,
 	    protos=None, oplane=None, lmask=-1, ilmask=-1, findseam=False, vertstep=None, hpars="-1", hsearch="73.0 170.0",
-	    full_output = False, compare_repro = False, compare_ref_free = "-1", ref_free_cutoff= "-1 -1 -1 -1", debug = False, recon_pad = 4):
+	    full_output = False, compare_repro = False, compare_ref_free = "-1", ref_free_cutoff= "-1 -1 -1 -1",
+	    wcmask = None, debug = False, recon_pad = 4):
 
 	from alignment      import Numrinit, prepare_refrings
 	from utilities      import model_circle, get_image, drop_image, get_input_from_string
@@ -250,6 +253,12 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 			wedgemask=[]
 			for pf in xrange(nrefs):
 				wedgemask.append(EMData())
+			# wedgemask option
+			if wcmask is not None:
+				wcmask = get_input_from_string(wcmask)
+				if len(wcmask) != 3:
+					print_msg("Error: wcmask option requires 3 values: x y radius")
+					sys.exit()
 
 	for im in xrange(nima):
 		data[im].set_attr('ID', list_of_particles[im])
@@ -532,7 +541,7 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 							vol[iref].write_image(os.path.join(outdir, "volOverSym_%s.hdf"%(itout)),-1)
 							# mask out tubulin & apply sym again for seam
 							# have to make a new wedgemask for each iteration
-							wedgemask[iref]=createWedgeMask(nx,proto[iref],dp[iref],dphi[iref],apix,hpar,3)
+							wedgemask[iref]=createWedgeMask(nx,proto[iref],dp[iref],dphi[iref],apix,hpar,3,wcmask)
 							# recreate the microtubule from seam
 							vol[iref] = regenerateFromPF(vol[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
 							voleve[iref] = regenerateFromPF(voleve[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
@@ -544,9 +553,9 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 
 						# apply vertical symmetry
 						if vertstep is not None:
-							vol[iref] = vol[iref].helicise(apix, vdp[iref], vdphi[iref])
-							voleve[iref] = voleve[iref].helicise(apix, dp[iref], dphi[iref])
-							volodd[iref] = volodd[iref].helicise(apix, dp[iref], dphi[iref])
+							vol[iref] = vol[iref].helicise(apix, vdp[iref], vdphi[iref],1.0)
+							voleve[iref] = voleve[iref].helicise(apix, vdp[iref], vdphi[iref],1.0)
+							volodd[iref] = volodd[iref].helicise(apix, vdp[iref], vdphi[iref],1.0)
 
 						print_msg("New rise and twist for model %i     : %8.3f, %8.3f\n"%(iref,dp[iref],dphi[iref]))
 						hpar = os.path.join(outdir,"hpar%02d.spi"%(iref))
@@ -560,9 +569,7 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 						print_msg("Time to search and apply helical symmetry for model %i: %s\n\n"%(iref, legibleTime(time()-start_time)))
 						start_time = time()
 
-						volmsk = vol[iref]*mask3D
-						volmsk = vol[iref]
-						volmsk.write_image(os.path.join(outdir, "vol_%s.hdf"%(itout)),-1)
+						vol[iref].write_image(os.path.join(outdir, "vol_%s.hdf"%(itout)),-1)
 
 						# get new FSC from symmetrized half volumes
 						fscc = fsc_mask( volodd[iref], voleve[iref], mask3D, rstep, fscfile)
@@ -1004,7 +1011,7 @@ def createCylMask(data,rmax,lmask,rmin,outfile=None):
 	return cyl
 	
 #===========================
-def createWedgeMask(nx,csym,rise,twist,apix,hfile,ovlp):
+def createWedgeMask(nx,csym,rise,twist,apix,hfile,ovlp,wcmask=None):
 	"""
 	a hard-edged wedge that follows helical symmetry
 	"""
@@ -1038,44 +1045,71 @@ def createWedgeMask(nx,csym,rise,twist,apix,hfile,ovlp):
 		t.set_rotation({"type":"2d","alpha":-finalrot})
 		newslice=img.process("xform",{"transform":t})
 		wedge.insert_clip(newslice,(0,0,z))
-	#wedge *= kinesinMask(nx,int(32/apix),54/apix,143/apix,rot)
-	#wedge += kinesinMask(nx,int(30/apix),24/apix,164/apix,rot,pos=True)
+
+	if wcmask is not None:
+		# for additional masking of features inside wedge
+		xmsk = int(wcmask[0]/apix)
+		ymsk = int(wcmask[1]/apix)
+		mskrad = int(wcmask[2]/apix)
+
+		# see if mask is near the edge:
+		edge=ymsk*math.atan(math.pi/csym)
+		if (abs(xmsk)+mskrad)>=edge:
+			# distance for corresponding positive mask
+			edge = int(2*edge)
+			xmsk2 = int(math.copysign(edge-abs(xmsk),xmsk)*-1)
+			# take max of 1 mask
+			avgr = Averagers.get("minmax",{"max":1})
+			avgr.add_image_list([wedge,wedgeCylMask(nx,mskrad,xmsk2,ymsk,rot,pos=True)])
+			wedge=avgr.finish()
+		# multiply 0 mask
+		wedge *= wedgeCylMask(nx,mskrad,xmsk,ymsk,rot)
 
 	# odd-numbered protofilaments are off by 1/2 twist
 	if csym%2==1:
 		t = Transform({"type":"spider","psi":twist/2})
 		wedge.process_inplace("xform",{"transform":t})
 
-	wedge.process_inplace("threshold.binary",{"value":0.00001})
 	#wedge.write_image('wedge_mask_p%d.mrc'%csym)
 
 	return wedge
 
 #===========================
-def kinesinMask(nx,rad,cx,cy,rot,pos=False):
-	# hard-edged cylinder mask for kinesin position
+def wedgeCylMask(nx,rad,cx,cy,rot,pos=False):
+	# soft-edged cylinder mask for additional masking
 	img = EMData(nx,nx)
 	img.to_one()
 	if pos is True:
 		img.to_zero()
-	for x,y in ((x,y) for x in range(nx) for y in range(nx)):
-		dx = abs(x-cx)
-		dy = abs(y-cy)
-		r2 = dx**2+dy**2
-		if r2 < rad*rad:
-			if pos is True:
-				img.set(nx/2-x,nx/2+y,1)
+
+	# outer radius
+	orad = (rad+rad*.5)
+
+	if abs(cy) > (nx/2-orad) : cy = int((cy/abs(cy))*(nx/2-orad))
+	if abs(cx) > (nx/2-orad) : cx = int((cx/abs(cx))*(nx/2-orad))
+
+	for x,y in ((x,y) for x in range(-nx/2,nx/2) for y in range(-nx/2,nx/2)):
+		r2 = x**2+y**2
+		if r2 < orad*orad:
+			if r2 < rad*rad:
+				val = 1
 			else:
-				img.set(nx/2+x,nx/2+y,0)
+				diff=orad**2-rad**2
+				val=1-((r2-rad*rad)/(diff))
+			if pos is True:
+				img.set(nx/2-x+cx,nx/2+y+cy,val)
+			else:
+				img.set(nx/2+x+cx,nx/2+y+cy,1-val)
+
 	#img.write_image('test.mrc')
-	cylmask = EMData(nx,nx,nx)
+	wmask = EMData(nx,nx,nx)
 	for z in range(nx):
 		finalrot=((z-nx/2)*rot)/3
 		t=Transform()
 		t.set_rotation({"type":"2d","alpha":-finalrot})
 		newslice=img.process("xform",{"transform":t})
-		cylmask.insert_clip(newslice,(0,0,z))
-	return cylmask
+		wmask.insert_clip(newslice,(0,0,z))
+	return wmask
 
 #===========================
 def prepare_refringsHelical( volft, kb, nx, delta, ref_a, oplane, sym, numr, MPI=False):
@@ -1249,7 +1283,6 @@ def hsearchsym(vol,dp,dphi,apix,rmax,rmin,hstep):
 
 	os.remove(tmphpar)
 	os.remove(volrot)
-
 	return float(pars[3]),float(pars[2])
 
 #===========================
@@ -1282,7 +1315,6 @@ def regenerateFromPF(vol,wedgemask,rise,rot,apix):
 	mask out one protofilament and regenerate the full microtubule
 	"""
 	from reconstruction_rjh import smart_add
-
 	# convert rise to pixels
 	nx = vol.get_xsize()
 	rise/=apix
@@ -1290,6 +1322,8 @@ def regenerateFromPF(vol,wedgemask,rise,rot,apix):
 
 	# apply protofilament symmetry
 	sumvol = vol*wedgemask
+	# save a copy of the single pf
+	sumvol.write_image("pf.hdf",0)
 
 	pfoffset=int(sym/2)
 	for pnum in range(-pfoffset,sym-pfoffset):
@@ -1303,7 +1337,7 @@ def regenerateFromPF(vol,wedgemask,rise,rot,apix):
 		volcopy = vol.process("xform",{"transform":t})
 		seammaskcopy = wedgemask.process("xform",{"transform":t})
 		sumvol = sumvol*(1-seammaskcopy)+volcopy*seammaskcopy
-		
+
 	sumvol.process_inplace("normalize")
 	return sumvol
 

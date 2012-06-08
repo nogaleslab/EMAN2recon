@@ -85,6 +85,7 @@ def main():
 	parser.add_option("--vertstep", type="float",   help="vertical step for vertical symmetry (in Angstroms)")
 	parser.add_option("--hpars",    type="string",  default= "-1",              help="twist rise for each volume (separate by spaces, not commas)")
 	parser.add_option("--hsearch",  type="string",  default= "73.0 170.0",      help="inner & outer radii for helical search (in Angstroms, default=73.0 170.0)")
+	parser.add_option("--wcmask",  type="string",   help="for seam reconstrucitons, this specifies an additional cylinder mask, specified as x, y, and cylinder radius in Angstroms")
         parser.add_option("--MPI",      action="store_true", default=False,         help="whether to use MPI version")
         parser.add_option("--debug",    action="store_true", default=False,         help="debug")
         (options, args) = parser.parse_args(arglist[1:])
@@ -112,7 +113,8 @@ def main():
                         options.center, options.maxit, options.term, options.CTF, options.fourvar, options.snr, options.ref_a, options.sym, 
 			options.sort, options.cutoff, options.pix_cutoff,  options.two_tail, options.model_jump, options.restart, options.save_half,
 			options.protos, options.oplane, options.lmask, options.ilmask, options.findseam, options.vertstep, options.hpars, options.hsearch,
-                        options.full_output, options.compare_repro, options.compare_ref_free, options.ref_free_cutoff, options.debug, options.recon_pad, options.MPI)
+                        options.full_output, options.compare_repro, options.compare_ref_free, options.ref_free_cutoff,
+			options.wcmask, options.debug, options.recon_pad, options.MPI)
                         global_def.BATCH = False
 		if options.MPI:
 			from mpi import mpi_finalize
