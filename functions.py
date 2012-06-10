@@ -96,14 +96,13 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 	max_iter    = int(maxit)
 	center      = int(center)
 
-	
 	nrefs   = EMUtil.get_image_count( ref_vol )
-	nmods = 0
+	nmasks = 0
 	if maskfile:
 		# read number of masks within each maskfile (mc)
-		nmods   = EMUtil.get_image_count( maskfile )
+		nmasks   = EMUtil.get_image_count( maskfile )
 		# open masks within maskfile (mc)
-		maskF   = EMData.read_images(maskfile, xrange(nmods))
+		maskF   = EMData.read_images(maskfile, xrange(nmasks))
 	vol     = EMData.read_images(ref_vol, xrange(nrefs))
 	nx      = vol[0].get_xsize()
 	
@@ -155,8 +154,8 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 		print_msg("Input stack		 : %s\n"%(stack))
 		print_msg("Reference volume	    : %s\n"%(ref_vol))	
 		print_msg("Output directory	    : %s\n"%(outdir))
-		if nmods > 0:
-			print_msg("Maskfile (number of masks)  : %s (%i)\n"%(maskfile,nmods))
+		if nmasks > 0:
+			print_msg("Maskfile (number of masks)  : %s (%i)\n"%(maskfile,nmasks))
 		print_msg("Inner radius		: %i\n"%(first_ring))
 		print_msg("Outer radius		: %i\n"%(last_ring))
 		print_msg("Ring step		   : %i\n"%(rstep))
@@ -237,8 +236,17 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 	data = EMData.read_images(stack, list_of_particles)
 	t_zero = Transform({"type":"spider","phi":0,"theta":0,"psi":0,"tx":0,"ty":0})
 	transmulti = [[t_zero for i in xrange(nrefs)] for j in xrange(nima)]
-	for im in xrange( nima ):
-		transmulti[im][0] = data[im].get_attr("xform.projection")
+
+	for iref,im in ((iref,im) for iref in xrange(nrefs) for im in xrange(nima)):
+		if nrefs == 1:
+			transmulti[im][iref] = data[im].get_attr("xform.projection")
+		else:
+			# if multi models, keep track of eulers for all models
+			try:
+				transmulti[im][iref] = data[im].get_attr("eulers_txty.%i"%iref)
+			except:
+				data[im].set_attr("eulers_txty.%i"%iref,t_zero)
+
 	scoremulti = [[0.0 for i in xrange(nrefs)] for j in xrange(nima)] 
 	pixelmulti = [[0.0 for i in xrange(nrefs)] for j in xrange(nima)] 
 	ref_res = [0.0 for x in xrange(nrefs)] 
@@ -301,34 +309,71 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 	total_iter = 0
 	volodd = EMData.read_images(ref_vol, xrange(nrefs))
 	voleve = EMData.read_images(ref_vol, xrange(nrefs))
-	if restart:
-		if CTF:  vol[0], fscc, volodd[0], voleve[0] = rec3D_MPI(data, snr, sym, fscmask, os.path.join(outdir, "fsc_000_00"), myid, main_node, index = -1,npad = recon_pad)
-		else:    vol[0], fscc, volodd[0], voleve[0] = rec3D_MPI_noCTF(data, sym, fscmask, os.path.join(outdir, "fsc_000_00"), myid, main_node, index = -1, npad = recon_pad)
-	
-		if myid == main_node:
-			vol[0].write_image(os.path.join(outdir, "vol_000_00.hdf"),-1)
-			if save_half is True:
-				volodd[0].write_image(os.path.join(outdir, "volodd_000_00.hdf"),-1)
-				voleve[0].write_image(os.path.join(outdir, "voleve_000_00.hdf"),-1)
-			ref_data[2] = vol[0]
-			ref_data[3] = fscc
-			#  call user-supplied function to prepare reference image, i.e., center and filter it
-			vol[0], cs,fl = ref_ali3d(ref_data)
-			vol[0].write_image(os.path.join(outdir, "volf_000_00.hdf"),-1)
-			if (apix == 1):
-				res_msg = "Models filtered at spatial frequency of:\t"
-				res = fl
-			else:
-				res_msg = "Models filtered at resolution of:       \t"
-				res = apix / fl	
-			ares = array2string(array(res), precision = 2)
-			print_msg("%s%s\n\n"%(res_msg,ares))	
-			
-		bcast_EMData_to_all(vol[0], myid, main_node)
-		# write out headers, under MPI writing has to be done sequentially
-		mpi_barrier(MPI_COMM_WORLD)
 
-# projection matching	
+	if restart:
+		# recreate initial volumes from alignments stored in header
+		itout = "000_00"
+		for iref in xrange(nrefs):
+			if(nrefs == 1):
+				modout = ""
+			else:
+				modout = "_model_%02d"%(iref)	
+	
+			if(sort): 
+				group = iref
+				for im in xrange(nima):
+					imgroup = data[im].get_attr('group')
+					if imgroup == iref:
+						data[im].set_attr('xform.projection',transmulti[im][iref])
+			else: 
+				group = int(999) 
+				for im in xrange(nima):
+					data[im].set_attr('xform.projection',transmulti[im][iref])
+			
+			fscfile = os.path.join(outdir, "fsc_%s%s"%(itout,modout))
+
+			if CTF:  vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI(data, snr, sym, fscmask, fscfile, myid, main_node, index = group,npad = recon_pad)
+			else:    vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(data, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
+	
+			if myid == main_node:
+				if helicalrecon:
+					vstep=None
+					if vertstep is not None:
+						vstep=(vdp[iref],vdphi[iref])
+					print_msg("Old rise and twist for model %i     : %8.3f, %8.3f\n"%(iref,dp[iref],dphi[iref]))
+					vol[iref],voleve[iref],volodd[iref],dp[iref],dphi[iref],vdp[iref],vdphi[iref]=processHelicalVol(vol[iref],voleve[iref],volodd[iref],iref,outdir,itout,dp[iref],dphi[iref],apix,hsearch,findseam,vstep,wcmask)
+					print_msg("New rise and twist for model %i     : %8.3f, %8.3f\n"%(iref,dp[iref],dphi[iref]))
+					# get new FSC from symmetrized half volumes
+					fscc = fsc_mask( volodd[iref], voleve[iref], mask3D, rstep, fscfile)
+				else:
+					vol[iref].write_image(os.path.join(outdir, "vol_%s.hdf"%itout),-1)
+
+				if save_half is True:
+					volodd[iref].write_image(os.path.join(outdir, "volodd_%s.hdf"%itout),-1)
+					voleve[iref].write_image(os.path.join(outdir, "voleve_%s.hdf"%itout),-1)
+
+				if nmasks > 1:
+					# Read mask for multiplying
+					ref_data[0] = maskF[iref]
+				ref_data[2] = vol[iref]
+				ref_data[3] = fscc
+				#  call user-supplied function to prepare reference image, i.e., center and filter it
+				vol[iref], cs,fl = ref_ali3d(ref_data)
+				vol[iref].write_image(os.path.join(outdir, "volf_%s.hdf"%(itout)),-1)
+				if (apix == 1):
+					res_msg = "Models filtered at spatial frequency of:\t"
+					res = fl
+				else:
+					res_msg = "Models filtered at resolution of:       \t"
+					res = apix / fl	
+				ares = array2string(array(res), precision = 2)
+				print_msg("%s%s\n\n"%(res_msg,ares))	
+			
+			bcast_EMData_to_all(vol[iref], myid, main_node)
+			# write out headers, under MPI writing has to be done sequentially
+			mpi_barrier(MPI_COMM_WORLD)
+
+	# projection matching	
 	for N_step in xrange(lstp):
 #		if compare_ref_free == "-1": 
 #			ref_free_cutoff[N_step] =-1
@@ -358,17 +403,16 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					start_time = time()
 	
 				for im in xrange( nima ):
+					data[im].set_attr("xform.projection", transmulti[im][iref])
 					if an[N_step] == -1:
-						data[im].set_attr("xform.projection", transmulti[im][iref])
 						t1, peak, pixer[im] = proj_ali_incore(data[im],refrings,numr,xrng[N_step],yrng[N_step],step[N_step],finfo)
 					else:
-						data[im].set_attr("xform.projection", transmulti[im][iref])
 						t1, peak, pixer[im] = proj_ali_incore_local(data[im],refrings,numr,xrng[N_step],yrng[N_step],step[N_step],an[N_step],finfo)
-					data[im].set_attr("xform.projection", t1)
+					#data[im].set_attr("xform.projection"%iref, t1)
+					if nrefs > 1: data[im].set_attr("eulers_txty.%i"%iref,t1)
 					scoremulti[im][iref] = peak
 					from pixel_error import max_3D_pixel_error
-					# t1 is the current param
-					#t1 = data[im].get_attr("xform.projection")
+					# t1 is the current param, t2 is old
 					t2 = transmulti[im][iref]
 					pixelmulti[im][iref] = max_3D_pixel_error(t1,t2,numr[-3])
 					transmulti[im][iref] = t1
@@ -377,9 +421,10 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					print_msg("Time of alignment for model %i: %s\n"%(iref, legibleTime(time()-start_time)))
 					start_time = time()
 			
+			# gather scoring data from all processors
+			from mpi import mpi_gatherv
 			scoremultisend = sum(scoremulti,[])
 			pixelmultisend = sum(pixelmulti,[])
-			from mpi import mpi_gatherv
 			tmp = mpi_gatherv(scoremultisend,len(scoremultisend),MPI_FLOAT, recvcount_score, disps_score, MPI_FLOAT, main_node,MPI_COMM_WORLD)
 			tmp1 = mpi_gatherv(pixelmultisend,len(pixelmultisend),MPI_FLOAT, recvcount_score, disps_score, MPI_FLOAT, main_node,MPI_COMM_WORLD)
 			tmp = mpi_bcast(tmp,(total_nima * nrefs), MPI_FLOAT,0, MPI_COMM_WORLD)
@@ -478,6 +523,8 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					cs = mpi_bcast(cs, 3, MPI_FLOAT, main_node, MPI_COMM_WORLD)
 					cs = [-float(cs[0]), -float(cs[1]), -float(cs[2])]
 					rotate_3D_shift(data, cs)
+
+
 				if(sort): 
 					group = iref
 					for im in xrange(nima):
@@ -517,75 +564,25 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 
 				if myid == main_node:
 					if helicalrecon:
-						# save a copy of the unsymmetrized volume
-						nosymf = os.path.join(outdir,"volNoSym_%s.hdf"%(itout))
-						vol[iref].write_image(nosymf,-1)
+						vstep=None
+						if vertstep is not None:
+							vstep=(vdp[iref],vdphi[iref])
 						print_msg("Old rise and twist for model %i     : %8.3f, %8.3f\n"%(iref,dp[iref],dphi[iref]))
-
-						# course helical symmetry
-						dp[iref],dphi[iref] = hsearchsym(vol[iref],dp[iref],dphi[iref],apix,hsearch[1],hsearch[0],0.05)
-						# fine helical symmetry
-						dp[iref],dphi[iref] = hsearchsym(vol[iref],dp[iref],dphi[iref],apix,hsearch[1],hsearch[0],0.01)
-
-						# find vertical symmetry
-						if vertstep is not None:
-						# course & fine vertical symmetry
-							vdp[iref],vdphi[iref] = hsearchsym(vol[iref],vdp[iref],vdphi[iref],apix,hsearch[1],hsearch[0],0.05)
-							vdp[iref],vdphi[iref] = hsearchsym(vol[iref],vdp[iref],vdphi[iref],apix,hsearch[1],hsearch[0],0.01)
-
-						# inner & outer radii in pixels 
-						if findseam is True:
-							vol[iref] = applySeamSym(vol[iref],dp[iref],dphi[iref],apix)
-							voleve[iref] = applySeamSym(voleve[iref],dp[iref],dphi[iref],apix)
-							volodd[iref] = applySeamSym(volodd[iref],dp[iref],dphi[iref],apix)
-							vol[iref].write_image(os.path.join(outdir, "volOverSym_%s.hdf"%(itout)),-1)
-							# mask out tubulin & apply sym again for seam
-							# have to make a new wedgemask for each iteration
-							wedgemask[iref]=createWedgeMask(nx,proto[iref],dp[iref],dphi[iref],apix,hpar,3,wcmask)
-							# recreate the microtubule from seam
-							vol[iref] = regenerateFromPF(vol[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
-							voleve[iref] = regenerateFromPF(voleve[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
-							volodd[iref] = regenerateFromPF(volodd[iref],wedgemask[iref],dp[iref],dphi[iref],apix)
-						else:
-							vol[iref] = vol[iref].helicise(apix, dp[iref], dphi[iref])
-							voleve[iref] = voleve[iref].helicise(apix, dp[iref], dphi[iref])
-							volodd[iref] = volodd[iref].helicise(apix, dp[iref], dphi[iref])
-
-						# apply vertical symmetry
-						if vertstep is not None:
-							vol[iref] = vol[iref].helicise(apix, vdp[iref], vdphi[iref],1.0)
-							voleve[iref] = voleve[iref].helicise(apix, vdp[iref], vdphi[iref],1.0)
-							volodd[iref] = volodd[iref].helicise(apix, vdp[iref], vdphi[iref],1.0)
-
+						vol[iref],voleve[iref],volodd[iref],dp[iref],dphi[iref],vdp[iref],vdphi[iref]=processHelicalVol(vol[iref],voleve[iref],volodd[iref],iref,outdir,itout,dp[iref],dphi[iref],apix,hsearch,findseam,vstep,wcmask)
 						print_msg("New rise and twist for model %i     : %8.3f, %8.3f\n"%(iref,dp[iref],dphi[iref]))
-						hpar = os.path.join(outdir,"hpar%02d.spi"%(iref))
-						f=open(hpar,'a')
-						f.write("%.6f\t%.6f"%(dphi[iref],dp[iref]))
-						if vertstep is not None:
-							f.write("\t%.6f\t%.6f"%(vdphi[iref],vdp[iref]))
-						f.write("\n")
-						f.close()
-
-						print_msg("Time to search and apply helical symmetry for model %i: %s\n\n"%(iref, legibleTime(time()-start_time)))
-						start_time = time()
-
-						vol[iref].write_image(os.path.join(outdir, "vol_%s.hdf"%(itout)),-1)
-
 						# get new FSC from symmetrized half volumes
 						fscc = fsc_mask( volodd[iref], voleve[iref], mask3D, rstep, fscfile)
 
-						if save_half is True:
-							volh = volodd[iref]*mask3D
-							volh.write_image(os.path.join(outdir, "volodd_%s.hdf"%(itout)),-1)
-							volh = voleve[iref]*mask3D
-							volh.write_image(os.path.join(outdir, "voleve_%s.hdf"%(itout)),-1)
-							del volh
+						print_msg("Time to search and apply helical symmetry for model %i: %s\n\n"%(iref, legibleTime(time()-start_time)))
+						start_time = time()
 					else:
 						vol[iref].write_image(os.path.join(outdir, "vol_%s.hdf"%(itout)),-1)
-						if save_half is True:
-							volodd[iref].write_image(os.path.join(outdir, "volodd_%s.hdf"%(itout)),-1)
-							voleve[iref].write_image(os.path.join(outdir, "voleve_%s.hdf"%(itout)),-1)
-					if nmods > 1:
+
+					if save_half is True:
+						volodd[iref].write_image(os.path.join(outdir, "volodd_%s.hdf"%(itout)),-1)
+						voleve[iref].write_image(os.path.join(outdir, "voleve_%s.hdf"%(itout)),-1)
+
+					if nmasks > 1:
 						# Read mask for multiplying
 						ref_data[0] = maskF[iref]
 					ref_data[2] = vol[iref]
@@ -611,13 +608,19 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					if compare_ref_free != "-1":
 						ref_free_output = os.path.join(outdir,"ref_free_%s%s"%(itout,modout))
 						rejects = compare(compare_ref_free, outfile_repro,ref_free_output,yrng[N_step], xrng[N_step], rstep,nx,apix,ref_free_cutoff[N_step], number_of_proc, myid, main_node)
+
+			# retrieve alignment params from all processors
 			par_str = ['xform.projection','ID','group']
+			if nrefs > 1:
+				for iref in xrange(nrefs):
+					par_str.append('eulers_txty.%i'%iref)
+
 			if myid == main_node:
-				
 				from utilities import recv_attr_dict
 				recv_attr_dict(main_node, stack, data, par_str, image_start, image_end, number_of_proc)
 				
 			else:	send_attr_dict(main_node, data, par_str, image_start, image_end)
+
 			if myid == main_node:
 				ares = array2string(array(res), precision = 2)
 				print_msg("%s%s\n\n"%(res_msg,ares))
@@ -627,12 +630,14 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					output_file = os.path.join(outdir, "paramout_%s"%itout)
 					foutput = open(output_file, 'w')
 					for im in xrange(nimat):
+						# save the parameters for each of the models
+						outstring = ""
 						dummy.read_image(stack,im,True)
 						param3d = dummy.get_attr('xform.projection')
-						# retrieve alignments in EMAN-format
-						paramEMAN = param3d.get_params('eman')
 						g = dummy.get_attr("group")
-						outstring = "%f\t%f\t%f\t%f\t%f\t%i\n" %(paramEMAN["az"], paramEMAN["alt"], paramEMAN["phi"], paramEMAN["tx"], paramEMAN["ty"], g)
+						# retrieve alignments in EMAN-format
+						pE = param3d.get_params('eman')
+						outstring += "%f\t%f\t%f\t%f\t%f\t%i\n" %(pE["az"], pE["alt"], pE["phi"], pE["tx"], pE["ty"],g)
 						foutput.write(outstring)
 					foutput.close()
 				del dummy
@@ -887,7 +892,7 @@ def proj_ali_incore(data, refrings, numr, xrng, yrng, step, finfo=None):
 	#set_params_proj(data, [phi, theta, psi, s2x, s2y])
 	t2 = Transform({"type":"spider","phi":phi,"theta":theta,"psi":psi})
 	t2.set_trans(Vec2f(-s2x, -s2y))
-	#data.set_attr("xform.projection", t2)
+
 	from pixel_error import max_3D_pixel_error
 	pixel_error = max_3D_pixel_error(t1, t2, numr[-3])
 
@@ -951,7 +956,7 @@ def proj_ali_incore_local(data, refrings, numr, xrng, yrng, step, an, finfo=None
 		#set_params_proj(data, [phi, theta, psi, s2x, s2y])
 		t2 = Transform({"type":"spider","phi":phi,"theta":theta,"psi":psi})
 		t2.set_trans(Vec2f(-s2x, -s2y))
-		#data.set_attr("xform.projection", t2)
+
 		from pixel_error import max_3D_pixel_error
 		pixel_error = max_3D_pixel_error(t1, t2, numr[-3])
 		if finfo:
@@ -960,6 +965,77 @@ def proj_ali_incore_local(data, refrings, numr, xrng, yrng, step, an, finfo=None
 		return t2, peak, pixel_error
 	else:
 		return -1.0e23, 0.0
+
+
+#=======================================
+def processHelicalVol(vol,voleve,volodd,iref,outdir,itout,dp,dphi,apix,hsearch,findseam=False,vertstep=None,wcmask=None):
+	import os
+	# save a copy of the unsymmetrized volume
+	nosymf = os.path.join(outdir,"volNoSym_%s.hdf"%(itout))
+	vol.write_image(nosymf,-1)
+
+	# course & fine helical symmetry
+	dp,dphi = hsearchsym(vol,dp,dphi,apix,hsearch[1],hsearch[0],0.05)
+	dp,dphi = hsearchsym(vol,dp,dphi,apix,hsearch[1],hsearch[0],0.01)
+
+	# find vertical symmetry
+	vdp,vdphi=None,None
+	if vertstep is not None:
+		print vertstep
+		vdp,vdphi=vertstep
+		# course & fine vertical symmetry
+		vdp,vdphi = hsearchsym(vol,vdp,vdphi,apix,hsearch[1],hsearch[0],0.05)
+		vdp,vdphi = hsearchsym(vol,vdp,vdphi,apix,hsearch[1],hsearch[0],0.01)
+
+	# inner & outer radii in pixels 
+	if findseam is True:
+		vol = applySeamSym(vol,dp,dphi,apix)
+		voleve = applySeamSym(voleve,dp,dphi,apix)
+		volodd = applySeamSym(volodd,dp,dphi,apix)
+		vol.write_image(os.path.join(outdir, "volOverSym_%s.hdf"%(itout)),-1)
+		# mask out tubulin & apply sym again for seam
+		# have to make a new wedgemask for each iteration
+		wedgemask=createWedgeMask(vol.get_xsize(),dp,dphi,apix,3,wcmask)
+		# recreate the microtubule from seam
+		vol = regenerateFromPF(vol,wedgemask,dp,dphi,apix)
+		voleve = regenerateFromPF(voleve,wedgemask,dp,dphi,apix)
+		volodd = regenerateFromPF(volodd,wedgemask,dp,dphi,apix)
+	else:
+		vol = vol.helicise(apix, dp, dphi)
+		voleve = voleve.helicise(apix, dp, dphi)
+		volodd = volodd.helicise(apix, dp, dphi)
+
+	# apply vertical symmetry
+	if vertstep is not None:
+		vol = applyVertSym(vol,apix,vdp,vdphi)
+		voleve = applyVertSym(voleve,apix,vdp,vdphi)
+		volodd = applyVertSym(volodd,apix,vdp,vdphi)
+
+	hpar = os.path.join(outdir,"hpar%02d.spi"%(iref))
+	f=open(hpar,'a')
+	f.write("%.6f\t%.6f"%(dphi,dp))
+	if vertstep is not None:
+		f.write("\t%.6f\t%.6f"%(vdphi,vdp))
+	f.write("\n")
+	f.close()
+
+	vol.process_inplace("normalize")
+	vol.write_image(os.path.join(outdir, "vol_%s.hdf"%(itout)),-1)
+
+	return vol,voleve,volodd,dp,dphi,vdp,vdphi
+
+#===========================
+def applyVertSym(vol,apix,dp,dphi):
+	# because helicise only applies hsym in one direction,
+	# make a flipped copy to apply in other direction
+	vol1 = vol.helicise(apix,dp,dphi)
+	t=Transform({"type":"spider","theta":180})
+	vol.process_inplace("xform",{"transform":t})
+	vol2 = vol.helicise(apix,dp,dphi)
+	vol2.process_inplace("xform",{"transform":t})
+	vol = vol1+vol2
+	del vol1,vol2
+	return vol
 
 #===========================
 def createCylMask(data,rmax,lmask,rmin,outfile=None):
@@ -1011,13 +1087,17 @@ def createCylMask(data,rmax,lmask,rmin,outfile=None):
 	return cyl
 	
 #===========================
-def createWedgeMask(nx,csym,rise,twist,apix,hfile,ovlp,wcmask=None):
+def createWedgeMask(nx,rise,twist,apix,ovlp,wcmask=None):
 	"""
 	a hard-edged wedge that follows helical symmetry
 	"""
 	import math
 	img = EMData(nx,nx)
 	img.to_zero()
+
+	# find csym number from rotation
+	csym=int(round(360.0/abs(twist)))
+
 	#add ovlp degrees to overlap with the neighboring density
 	overlap=ovlp*math.pi/180.0
 	alpha = math.pi/2 - math.pi/csym
