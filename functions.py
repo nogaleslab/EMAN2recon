@@ -105,6 +105,15 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 		maskF   = EMData.read_images(maskfile, xrange(nmasks))
 	vol     = EMData.read_images(ref_vol, xrange(nrefs))
 	nx      = vol[0].get_xsize()
+
+	## make sure box sizes are the same
+	if myid == main_node:
+		im=EMData.read_images(stack,[0])
+		bx = im[0].get_xsize()
+		if bx!=nx:
+			print_msg("Error: Stack box size (%i) differs from initial model (%i)\n"%(bx,nx))
+			sys.exit()
+		del im,bx
 	
 	# for helical processing:
 	helicalrecon = False
@@ -234,6 +243,7 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 		finfo.flush()
 
 	data = EMData.read_images(stack, list_of_particles)
+
 	t_zero = Transform({"type":"spider","phi":0,"theta":0,"psi":0,"tx":0,"ty":0})
 	transmulti = [[t_zero for i in xrange(nrefs)] for j in xrange(nima)]
 
