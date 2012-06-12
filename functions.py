@@ -279,6 +279,16 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					print_msg("Error: wcmask option requires 3 values: x y radius")
 					sys.exit()
 
+	# determine if particles have helix info:
+	try:
+		data[0].get_attr('h_angle')
+		original_data = []
+		boxmask = True
+		from hfunctions import createBoxMask
+	except:
+		boxmask = False
+
+	# prepare particles
 	for im in xrange(nima):
 		data[im].set_attr('ID', list_of_particles[im])
 		data[im].set_attr('pix_score', int(0))
@@ -288,7 +298,13 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 			data[im] -= st[0]
 			data[im] = filt_ctf(data[im], ctf_params, sign = -1)
 			data[im].set_attr('ctf_applied', 1)
-
+		# for window mask:
+		if boxmask is True:
+			h_angle = data[im].get_attr("h_angle")
+			original_data.append(data[im].copy())
+			bmask = createBoxMask(nx,apix,ou,lmask,h_angle)
+			data[im]*=bmask
+			del bmask
 	if debug:
 		finfo.write( '%d loaded  \n' % nima )
 		finfo.flush()
@@ -343,9 +359,17 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 			
 			fscfile = os.path.join(outdir, "fsc_%s%s"%(itout,modout))
 
-			if CTF:  vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI(data, snr, sym, fscmask, fscfile, myid, main_node, index = group,npad = recon_pad)
-			else:    vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(data, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
-	
+			# if particles were windowed
+			if boxmask is True:
+				for im in xrange(nima):
+					original_data[im].set_attr('group',data[im].get_attr('group'))
+					original_data[im].set_attr('xform.projection',data[im].get_attr('xform.projection'))
+				particles = original_data
+			else: particles = data
+
+			if CTF:  vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI(particles, snr, sym, fscmask, fscfile, myid, main_node, index = group,npad = recon_pad)
+			else:    vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(particles, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
+
 			if myid == main_node:
 				if helicalrecon:
 					from hfunctions import processHelicalVol
@@ -557,10 +581,18 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					modout = "_model_%02d"%(iref)	
 				
 				fscfile = os.path.join(outdir, "fsc_%s%s"%(itout,modout))
+				# if particles were windowed
+				if boxmask is True:
+					for im in xrange(nima):
+						original_data[im].set_attr('group',data[im].get_attr('group'))
+						original_data[im].set_attr('xform.projection',data[im].get_attr('xform.projection'))
+					particles = original_data
+				else: particles = data
+
 				if CTF:
-					vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI(data, snr, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
+					vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI(particles, snr, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
 				else:   
-					vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(data, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
+					vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(particles, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
 	
 				if myid == main_node:
 					print_msg("3D reconstruction time for model %i: %s\n"%(iref, legibleTime(time()-start_time)))
@@ -947,15 +979,11 @@ def proj_ali_incore_local(data, refrings, numr, xrng, yrng, step, an, finfo=None
 	
 	if finfo:
 		finfo.write("Image id: %6d\n"%(ID))
-		#finfo.write("Old parameters: %9.4f %9.4f %9.4f %9.4f %9.4f\n"%(phi, theta, psi, sxo, syo))
 		finfo.write("Old parameters: %9.4f %9.4f %9.4f %9.4f %9.4f\n"%(dp["phi"], dp["theta"], dp["psi"], -tx, -ty))
 		finfo.flush()
 
-	#[ang, sxs, sys, mirror, iref, peak] = Util.multiref_polar_ali_2d_local(data, refrings, xrng, yrng, step, ant, mode, numr, cnx-sxo, cny-syo)
 	[ang, sxs, sys, mirror, iref, peak] = Util.multiref_polar_ali_2d_local(data, refrings, xrng, yrng, step, ant, mode, numr, cnx+tx, cny+ty)
 	iref=int(iref)
-	#[ang,sxs,sys,mirror,peak,numref] = apmq_local(projdata[imn], ref_proj_rings, xrng, yrng, step, ant, mode, numr, cnx-sxo, cny-syo)
-	#ang = (ang+360.0)%360.0
 	data.set_attr("assign",iref)
 	if iref > -1:
 		# The ormqip returns parameters such that the transformation is applied first, the mirror operation second.
@@ -974,7 +1002,6 @@ def proj_ali_incore_local(data, refrings, numr, xrng, yrng, step, an, finfo=None
 			s2x   = sxb - tx
 			s2y   = syb - ty
 
-		#set_params_proj(data, [phi, theta, psi, s2x, s2y])
 		t2 = Transform({"type":"spider","phi":phi,"theta":theta,"psi":psi})
 		t2.set_trans(Vec2f(-s2x, -s2y))
 

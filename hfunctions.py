@@ -2,10 +2,10 @@
 
 from EMAN2_cppwrap import *
 from global_def import *
+import os
 
 #=======================================
 def processHelicalVol(vol,voleve,volodd,iref,outdir,itout,dp,dphi,apix,hsearch,findseam=False,vertstep=None,wcmask=None):
-	import os
 	# save a copy of the unsymmetrized volume
 	nosymf = os.path.join(outdir,"volNoSym_%s.hdf"%(itout))
 	vol.write_image(nosymf,-1)
@@ -65,13 +65,41 @@ def applyVertSym(vol,apix,dp,dphi):
 	# because helicise only applies hsym in one direction,
 	# make a flipped copy to apply in other direction
 	vol1 = vol.helicise(apix,dp,dphi)
-	t=Transform({"type":"spider","theta":180})
+	t = Transform({"type":"spider","theta":180})
 	vol.process_inplace("xform",{"transform":t})
 	vol2 = vol.helicise(apix,dp,dphi)
 	vol2.process_inplace("xform",{"transform":t})
 	vol = vol1+vol2
 	del vol1,vol2
 	return vol
+
+#===========================
+def createBoxMask(nx,apix,rmax,lmask,rot=0.0):
+	"""
+	create a 2D rectangular mask for helical particles
+	"""
+	# convert lmask to pixels
+	lmask = int(lmask/apix)
+	falloff = int(lmask*0.3)
+
+	# rmax is in pixels
+	if rmax == -1:
+		rmax = int(nx/2-falloff)
+	rmax*= 2
+	
+	mx = rmax+(falloff*2)
+	my = lmask+(falloff*2)
+	if mx > nx: mx=nx
+	if my > nx: my=nx
+	mask=EMData(mx,my)
+	mask.to_one()
+	mask.process_inplace("mask.decayedge2d",{"width":falloff})
+	mask = Util.pad(mask,nx,nx,1,0,0,0,"edge")	
+
+	if rot > 0:
+		t = Transform({"type":"spider","psi":rot})
+		mask.process_inplace("xform",{"transform":t})
+	return mask
 
 #===========================
 def createCylMask(data,rmax,lmask,rmin,outfile=None):
@@ -125,7 +153,7 @@ def createCylMask(data,rmax,lmask,rmin,outfile=None):
 #===========================
 def createWedgeMask(nx,rise,twist,apix,ovlp,wcmask=None):
 	"""
-	a hard-edged wedge that follows helical symmetry
+	a soft wedge that follows helical symmetry
 	"""
 	import math
 	img = EMData(nx,nx)
@@ -157,7 +185,7 @@ def createWedgeMask(nx,rise,twist,apix,ovlp,wcmask=None):
 	rot = alpha/lrise*apix
 	for z in range(nx):
 		finalrot = ((z-nx/2)*rot)/3
-		t=Transform()
+		t = Transform()
 		t.set_rotation({"type":"2d","alpha":-finalrot})
 		newslice=img.process("xform",{"transform":t})
 		wedge.insert_clip(newslice,(0,0,z))
@@ -221,7 +249,7 @@ def wedgeCylMask(nx,rad,cx,cy,rot,pos=False):
 	wmask = EMData(nx,nx,nx)
 	for z in range(nx):
 		finalrot=((z-nx/2)*rot)/3
-		t=Transform()
+		t = Transform()
 		t.set_rotation({"type":"2d","alpha":-finalrot})
 		newslice=img.process("xform",{"transform":t})
 		wmask.insert_clip(newslice,(0,0,z))
