@@ -618,7 +618,6 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 						if vertstep is not None:
 							vstep=(vdp[iref],vdphi[iref])
 						print_msg("Old rise and twist for model %i     : %8.3f, %8.3f\n"%(iref,dp[iref],dphi[iref]))
-						print_msg("Old rise and twist for model %i     : %8.3f, %8.3f\n"%(iref,dp[iref],dphi[iref]))
 						hvals=processHelicalVol(vol[iref],voleve[iref],volodd[iref],iref,outdir,itout,
 									dp[iref],dphi[iref],apix,hsearch,findseam,vstep,wcmask)
 						(vol[iref],voleve[iref],volodd[iref],dp[iref],dphi[iref],vdp[iref],vdphi[iref])=hvals
