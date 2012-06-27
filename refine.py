@@ -85,7 +85,7 @@ def main():
 	parser.add_option("--vertstep", type="float",   help="vertical step for vertical symmetry (in Angstroms)")
 	parser.add_option("--hpars",    type="string",  default= "-1",              help="twist rise for each volume (separate by spaces, not commas)")
 	parser.add_option("--hsearch",  type="string",  default= "73.0 170.0",      help="inner & outer radii for helical search (in Angstroms, default=73.0 170.0)")
-	parser.add_option("--wcmask",  type="string",   help="for seam reconstrucitons, this specifies an additional cylinder mask, specified as x, y, and cylinder radius in Angstroms")
+	parser.add_option("--wcmask",  type="string",   help="specifies an additional cylinder mask, specified as x, y, and cylinder radius in Angstroms")
         parser.add_option("--MPI",      action="store_true", default=False,         help="whether to use MPI version")
         parser.add_option("--debug",    action="store_true", default=False,         help="debug")
         (options, args) = parser.parse_args(arglist[1:])
