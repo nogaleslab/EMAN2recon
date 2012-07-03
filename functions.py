@@ -215,9 +215,8 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 
 	fscmask = model_circle(last_ring,nx,nx,nx)
 	if CTF:
-		from reconstruction_rjh import rec3D_MPI
 		from filter	 import filt_ctf
-	else:   from reconstruction_rjh import rec3D_MPI_noCTF
+	from reconstruction_rjh import rec3D_MPI_noCTF
 
 	if myid == main_node:
 		active = EMUtil.get_all_attributes(stack, 'active')
@@ -229,12 +228,13 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 	else:
 		nima = 0
 	total_nima = bcast_number_to_all(nima, source_node = main_node)
-#	nima_per_ref = total_nima / nrefs
+
 	if myid != main_node:
 		list_of_particles = [-1]*total_nima
 	list_of_particles = bcast_list_to_all(list_of_particles, source_node = main_node)
 
 	image_start, image_end = MPI_start_end(total_nima, number_of_proc, myid)
+
 	# create a list of images for each node
 	list_of_particles = list_of_particles[image_start: image_end]
 	nima = len(list_of_particles)
@@ -293,10 +293,11 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 		data[im].set_attr('ID', list_of_particles[im])
 		data[im].set_attr('pix_score', int(0))
 		if CTF:
+			# only phaseflip particles, not full CTF correction
 			ctf_params = data[im].get_attr("ctf")
 			st = Util.infomask(data[im], mask2D, False)
 			data[im] -= st[0]
-			data[im] = filt_ctf(data[im], ctf_params, sign = -1)
+			data[im] = filt_ctf(data[im], ctf_params, sign = -1, binary=1)
 			data[im].set_attr('ctf_applied', 1)
 		# for window mask:
 		if boxmask is True:
@@ -359,16 +360,7 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 			
 			fscfile = os.path.join(outdir, "fsc_%s%s"%(itout,modout))
 
-			# if particles were windowed
-			if boxmask is True:
-				for im in xrange(nima):
-					original_data[im].set_attr('group',data[im].get_attr('group'))
-					original_data[im].set_attr('xform.projection',data[im].get_attr('xform.projection'))
-				particles = original_data
-			else: particles = data
-
-			if CTF:  vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI(particles, snr, sym, fscmask, fscfile, myid, main_node, index = group,npad = recon_pad)
-			else:    vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(particles, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
+			vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(data, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
 
 			if myid == main_node:
 				if helicalrecon:
@@ -414,9 +406,6 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 
 	# projection matching	
 	for N_step in xrange(lstp):
-#		if compare_ref_free == "-1": 
-#			ref_free_cutoff[N_step] =-1
-#			print ref_free_cutoff
 		terminate = 0
 		Iter = -1
  		while(Iter < max_iter-1 and terminate == 0):
@@ -431,13 +420,15 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 				volft,kb = prep_vol( vol[iref] )
 
 				## constrain projections to out of plane parameter
+				theta1 = None
+				theta2 = None
 				if oplane is not None:
-					from hfunctions import prepare_refringsHelical
-					refrings = prepare_refringsHelical( volft, kb, nx, delta[N_step], ref_a, oplane, sym, numr, True)
-				else:
-					refrings = prepare_refrings( volft, kb, nx, delta[N_step], ref_a, sym, numr, MPI = True)
+					theta1 = 90-oplane
+					theta2 = 90+oplane
+				refrings = prepare_refrings( volft, kb, nx, delta[N_step], ref_a, sym, numr, MPI=True, phiEqpsi = "Minus", initial_theta=theta1, delta_theta=theta2)
 				
 				del volft,kb
+
 				if myid== main_node:
 					print_msg( "Time to prepare projections for model %i: %s\n" % (iref, legibleTime(time()-start_time)) )
 					start_time = time()
@@ -460,7 +451,8 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 				if myid == main_node:
 					print_msg("Time of alignment for model %i: %s\n"%(iref, legibleTime(time()-start_time)))
 					start_time = time()
-			
+
+
 			# gather scoring data from all processors
 			from mpi import mpi_gatherv
 			scoremultisend = sum(scoremulti,[])
@@ -557,9 +549,6 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					from utilities      import estimate_3D_center_MPI, rotate_3D_shift
 					dummy=EMData()
 					cs[0], cs[1], cs[2], dummy, dummy = estimate_3D_center_MPI(data, total_nima, myid, number_of_proc, main_node)				
-			#R		if myid == main_node:
-			#R			msg = " Average center x = %10.3f	Center y = %10.3f	Center z = %10.3f\n"%(cs[0], cs[1], cs[2])
-			#R			print_msg(msg)
 					cs = mpi_bcast(cs, 3, MPI_FLOAT, main_node, MPI_COMM_WORLD)
 					cs = [-float(cs[0]), -float(cs[1]), -float(cs[2])]
 					rotate_3D_shift(data, cs)
@@ -581,18 +570,7 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 					modout = "_model_%02d"%(iref)	
 				
 				fscfile = os.path.join(outdir, "fsc_%s%s"%(itout,modout))
-				# if particles were windowed
-				if boxmask is True:
-					for im in xrange(nima):
-						original_data[im].set_attr('group',data[im].get_attr('group'))
-						original_data[im].set_attr('xform.projection',data[im].get_attr('xform.projection'))
-					particles = original_data
-				else: particles = data
-
-				if CTF:
-					vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI(particles, snr, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
-				else:   
-					vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(particles, sym, fscmask, fscfile, myid, main_node, index = group, npad = recon_pad)
+				vol[iref], fscc, volodd[iref], voleve[iref] = rec3D_MPI_noCTF(data, sym, fscmask, fscfile, myid, main_node, index=group, npad=recon_pad)
 	
 				if myid == main_node:
 					print_msg("3D reconstruction time for model %i: %s\n"%(iref, legibleTime(time()-start_time)))
@@ -602,7 +580,7 @@ def ali3d_MPI(stack, ref_vol, outdir, maskfile = None, ir = 1, ou = -1, rs = 1,
 				if fourvar:
 					outvar = os.path.join(outdir, "volVar_%s.hdf"%(itout))
 					ssnr_file = os.path.join(outdir, "ssnr_%s"%(itout))
-					varf = varf3d_MPI(data, ssnr_text_file=ssnr_file, mask2D=None, reference_structure=vol[iref], ou=last_ring, rw=1.0, npad=1, CTF=CTF, sign=1, sym=sym, myid=myid)
+					varf = varf3d_MPI(data, ssnr_text_file=ssnr_file, mask2D=None, reference_structure=vol[iref], ou=last_ring, rw=1.0, npad=1, CTF=None, sign=1, sym=sym, myid=myid)
 					if myid == main_node:
 						print_msg("Time to calculate 3D Fourier variance for model %i: %s\n"%(iref, legibleTime(time()-start_time)))
 						start_time = time()
